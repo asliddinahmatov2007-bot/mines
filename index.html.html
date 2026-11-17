@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="uz"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Mines</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{--bg:#0e1420;--panel:#172033;--cell:#212c44;--ink:#e8eefc;--dim:#8b97b3;--gem:#2fd5a0;--bomb:#ff5d6c;--accent:#ffc857}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,system-ui,sans-serif;padding:12px 12px calc(12px + env(safe-area-inset-bottom))}
+.top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+.top b{font-size:22px}.bal{font-size:20px;font-weight:700;color:var(--accent)}
+.mults{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;min-height:34px}
+.mults span{background:var(--panel);color:var(--dim);padding:5px 10px;border-radius:8px;font-size:14px;white-space:nowrap}
+.mults span.on{background:var(--accent);color:#1a1300;font-weight:700}
+#msg{text-align:center;min-height:24px;margin:6px 0;font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;background:var(--panel);padding:10px;border-radius:16px}
+.c{aspect-ratio:1;border:0;border-radius:12px;background:var(--cell);font-size:30px;color:var(--ink);padding:0}
+.c:active{transform:scale(.94)}
+.c.gem{background:var(--gem)}.c.bomb{background:var(--bomb)}.c.ghost{opacity:.45}
+.box{background:var(--panel);border-radius:16px;padding:12px;margin-top:12px}
+.row{display:flex;gap:8px;align-items:center}
+input{flex:1;min-width:0;background:var(--bg);border:1px solid var(--cell);color:var(--ink);font-size:20px;padding:10px 12px;border-radius:10px}
+.sm{background:var(--cell);color:var(--ink);border:0;border-radius:10px;padding:11px 14px;font-size:16px}
+.mn{display:flex;gap:6px;margin:10px 0}
+.mn button{flex:1;background:var(--cell);color:var(--ink);border:0;border-radius:10px;padding:10px 0;font-size:16px}
+.mn button.on{background:#6c5ce7}
+.go{width:100%;border:0;border-radius:12px;padding:15px;font-size:18px;font-weight:700;background:var(--gem);color:#06251c}
+.go.cash{background:var(--accent);color:#1a1300}.go:disabled{opacity:.5}
+</style></head><body>
+<div class="top"><b>Mines</b><span class="bal" id="bal">0</span></div>
+<div class="mults" id="mults"></div>
+<div id="msg"></div>
+<div class="grid" id="grid"></div>
+<div class="box">
+  <div class="row"><input id="bet" type="number" inputmode="decimal" value="10" min="1">
+  <button class="sm" onclick="bet.value=Math.max(1,Math.floor(bet.value/2))">½</button>
+  <button class="sm" onclick="bet.value=Math.floor(bet.value*2)">×2</button></div>
+  <div class="mn" id="mn"></div>
+  <button class="go" id="go" onclick="main()">Boshlash</button>
+</div>
+<script>
+const tg=Telegram.WebApp;tg.ready();tg.expand();
+let s={},mines=3;
+const $=id=>document.getElementById(id);
+const bet=$('bet');
+async function api(p,b){
+  const r=await fetch('/api/'+p,{method:'POST',headers:{'Content-Type':'application/json','X-Init-Data':tg.initData},body:JSON.stringify(b||{})});
+  const j=await r.json();
+  if(!r.ok){$('msg').textContent=j.detail||'Xatolik';return null}
+  return j;
+}
+function mult(n,k){let c=(a,b)=>{let r=1;for(let i=1;i<=b;i++)r=r*(a-b+i)/i;return r};return Math.round(97*c(25,k)/c(25-n,k))/100}
+function setMines(n){mines=n;draw()}
+function drawMn(){
+  $('mn').innerHTML=[1,3,5,10,24].map(n=>`<button class="${n==mines?'on':''}" ${s.active?'disabled':''} onclick="setMines(${n})">${n}</button>`).join('');
+}
+function draw(){
+  $('bal').textContent=(s.balance??0).toLocaleString()+' ball';
+  const n=s.active?(s.mines_n||mines):mines, k=s.opened?s.opened.length:0;
+  $('mults').innerHTML=[1,2,3,4,5,6].map(i=>`<span class="${s.active&&i==k+1?'on':''}">${mult(n,i)}x</span>`).join('');
+  let h='';
+  for(let i=0;i<25;i++){
+    let cls='c',t='';
+    const op=s.opened&&s.opened.includes(i), mn=s.mines&&s.mines.includes(i);
+    if(op){cls+=' gem';t='💎'}else if(mn){cls+=' bomb';t='💣'}else if(s.mines)cls+=' ghost';
+    h+=`<button class="${cls}" onclick="openCell(${i})" ${s.active&&!op?'':'disabled'}>${t}</button>`;
+  }
+  $('grid').innerHTML=h;
+  const go=$('go');
+  if(s.active){go.className='go cash';go.disabled=!k;go.textContent=k?`Olish ${(s.bet*s.mult).toFixed(2)}`:'Katakni oching'}
+  else{go.className='go';go.disabled=false;go.textContent='Boshlash'}
+  drawMn();
+}
+async function load(){const j=await api('state');if(j){s=j;if(s.active)s.mines_n=s.mines_n||mines;draw()}}
+async function main(){
+  const j=s.active?await api('cashout'):await api('start',{bet:+bet.value,mines});
+  if(!j)return;apply(j,!s.active);
+}
+async function openCell(i){const j=await api('open',{cell:i});if(j)apply(j)}
+function apply(j,fresh){
+  const was=s.active;
+  if(j.active&&fresh)j.mines_n=mines;else if(j.active)j.mines_n=s.mines_n;
+  s=j;
+  $('msg').textContent=j.won===true?`Yutdingiz: +${j.payout}`:j.won===false?'Mina! Tikish yo\'qoldi':'';
+  $('msg').style.color=j.won===true?'var(--gem)':'var(--bomb)';
+  if(j.won!==undefined)tg.HapticFeedback?.notificationOccurred(j.won?'success':'error');
+  draw();
+}
+load();
+</script></body></html>
