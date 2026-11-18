@@ -19,7 +19,7 @@ bot, dp = Bot(TOKEN), Dispatcher()
 async def start(m: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="O'ynash", web_app=WebAppInfo(url=WEBAPP_URL))]])
-    await m.answer("Mines. Virtual ballar bilan o'yin.", reply_markup=kb)
+    await m.answer("Ochko 21. Virtual ballar bilan o'yin.", reply_markup=kb)
 
 @dp.message(Command("add"))
 async def add(m: Message):
@@ -39,8 +39,7 @@ async def lifespan(app):
 app = FastAPI(lifespan=lifespan)
 db = sqlite3.connect("mines.db", check_same_thread=False)
 db.row_factory = sqlite3.Row
-db.executescript("""create table if not exists users(id integer primary key, balance real);
-create table if not exists games(uid integer primary key, bet real, mines text, opened text);""")
+db.executescript("create table if not exists users(id integer primary key, balance real);")
 
 def auth(init: str) -> int:
     d = dict(parse_qsl(init, keep_blank_values=True))
@@ -51,9 +50,6 @@ def auth(init: str) -> int:
         raise HTTPException(401, "Auth xato")
     return json.loads(d["user"])["id"]
 
-def mult(n, k):  # n mina, k ochilgan xavfsiz katak
-    return round(0.97 * comb(25, k) / comb(25 - n, k), 2)
-
 def bal(uid):
     r = db.execute("select balance from users where id=?", (uid,)).fetchone()
     if not r:
@@ -63,67 +59,88 @@ def bal(uid):
 def setbal(uid, b):
     db.execute("update users set balance=? where id=?", (round(b, 2), uid)); db.commit()
 
-def game(uid):
-    r = db.execute("select * from games where uid=?", (uid,)).fetchone()
-    return (r["bet"], json.loads(r["mines"]), json.loads(r["opened"])) if r else None
+# ---------------- BLACKJACK ----------------
+db.executescript("create table if not exists bj(uid integer primary key, bet real, deck text, p text, d text);")
+RANKS = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"]
+SUITS = ["♠","♥","♦","♣"]
 
-def view(uid, over=None):
-    g, out = game(uid), {"balance": bal(uid), "active": False}
+def hv(h):
+    t = a = 0
+    for r, _ in h:
+        if r == "A": t += 11; a += 1
+        elif r in ("J","Q","K","10"): t += 10
+        else: t += int(r)
+    while t > 21 and a: t -= 10; a -= 1
+    return t
+
+def bj_get(uid):
+    r = db.execute("select * from bj where uid=?", (uid,)).fetchone()
+    return (r["bet"], json.loads(r["deck"]), json.loads(r["p"]), json.loads(r["d"])) if r else None
+
+def bj_save(uid, bet, deck, p, d):
+    db.execute("insert or replace into bj values(?,?,?,?,?)",
+               (uid, bet, json.dumps(deck), json.dumps(p), json.dumps(d))); db.commit()
+
+def bj_view(uid, over=None):
+    g, out = bj_get(uid), {"balance": bal(uid), "active": False}
     if g:
-        bet, m, o = g
-        left = 25 - len(m) - len(o)
-        out.update(active=True, bet=bet, opened=o, mult=mult(len(m), len(o)),
-                   next=mult(len(m), len(o) + 1) if left > 0 else None)
+        bet, deck, p, d = g
+        out.update(active=True, bet=bet, player=p, dealer=d[:1], pv=hv(p))
     if over: out.update(over)
     return out
 
-def finish(uid, won):
-    bet, m, o = game(uid)
-    pay = round(bet * mult(len(m), len(o)), 2) if won else 0
-    if won: setbal(uid, bal(uid) + pay)
-    db.execute("delete from games where uid=?", (uid,)); db.commit()
-    return view(uid, {"mines": m, "opened": o, "won": won, "payout": pay})
+def bj_settle(uid):
+    bet, deck, p, d = bj_get(uid)
+    pv = hv(p)
+    if pv <= 21:
+        while hv(d) < 17: d.append(deck.pop())
+    dv = hv(d); nat = len(p) == 2 and pv == 21; dnat = len(d) == 2 and dv == 21
+    if pv > 21: res, pay = "lose", 0
+    elif nat and not dnat: res, pay = "blackjack", bet * 2.5
+    elif dnat and not nat: res, pay = "lose", 0
+    elif dv > 21 or pv > dv: res, pay = "win", bet * 2
+    elif pv == dv: res, pay = "push", bet
+    else: res, pay = "lose", 0
+    pay = round(pay, 2)
+    if pay: setbal(uid, bal(uid) + pay)
+    db.execute("delete from bj where uid=?", (uid,)); db.commit()
+    return bj_view(uid, {"dealer": d, "player": p, "pv": pv, "dv": dv,
+                         "result": res, "payout": pay, "bet": bet})
 
-class StartReq(BaseModel): bet: float; mines: int
-class OpenReq(BaseModel): cell: int
+class BjStart(BaseModel): bet: float
 
-@app.post("/api/state")
-def state(x_init_data: str = Header("")):
+@app.post("/api/bj/state")
+def bj_state(x_init_data: str = Header("")):
     uid = auth(x_init_data)
-    if bal(uid) < 1 and not game(uid): setbal(uid, START)
-    return view(uid)
+    if bal(uid) < 1 and not bj_get(uid): setbal(uid, START)
+    return bj_view(uid)
 
-@app.post("/api/start")
-def start_game(r: StartReq, x_init_data: str = Header("")):
+@app.post("/api/bj/start")
+def bj_start(r: BjStart, x_init_data: str = Header("")):
     uid = auth(x_init_data)
-    if game(uid): raise HTTPException(400, "O'yin davom etmoqda")
-    if not 1 <= r.mines <= 24: raise HTTPException(400, "Mina soni 1-24")
+    if bj_get(uid): raise HTTPException(400, "O'yin davom etmoqda")
     if r.bet < 1 or r.bet > bal(uid): raise HTTPException(400, "Tikish noto'g'ri yoki balans yetmaydi")
     setbal(uid, bal(uid) - r.bet)
-    mines = random.sample(range(25), r.mines)
-    db.execute("insert into games values(?,?,?,?)", (uid, r.bet, json.dumps(mines), "[]")); db.commit()
-    return view(uid)
+    deck = [[x, y] for x in RANKS for y in SUITS]
+    random.shuffle(deck)
+    p, d = [deck.pop(), deck.pop()], [deck.pop(), deck.pop()]
+    bj_save(uid, r.bet, deck, p, d)
+    return bj_settle(uid) if hv(p) == 21 else bj_view(uid)
 
-@app.post("/api/open")
-def open_cell(r: OpenReq, x_init_data: str = Header("")):
+@app.post("/api/bj/hit")
+def bj_hit(x_init_data: str = Header("")):
     uid = auth(x_init_data)
-    g = game(uid)
-    if not g or not 0 <= r.cell < 25: raise HTTPException(400, "O'yin yo'q")
-    bet, m, o = g
-    if r.cell in o: raise HTTPException(400, "Katak ochilgan")
-    if r.cell in m:
-        return finish(uid, False)
-    o.append(r.cell)
-    db.execute("update games set opened=? where uid=?", (json.dumps(o), uid)); db.commit()
-    if len(o) == 25 - len(m): return finish(uid, True)
-    return view(uid)
+    g = bj_get(uid)
+    if not g: raise HTTPException(400, "O'yin yo'q")
+    bet, deck, p, d = g
+    p.append(deck.pop()); bj_save(uid, bet, deck, p, d)
+    return bj_settle(uid) if hv(p) >= 21 else bj_view(uid)
 
-@app.post("/api/cashout")
-def cashout(x_init_data: str = Header("")):
+@app.post("/api/bj/stand")
+def bj_stand(x_init_data: str = Header("")):
     uid = auth(x_init_data)
-    g = game(uid)
-    if not g or not g[2]: raise HTTPException(400, "Avval kamida bitta katak oching")
-    return finish(uid, True)
+    if not bj_get(uid): raise HTTPException(400, "O'yin yo'q")
+    return bj_settle(uid)
 
 @app.get("/")
 def index(): return FileResponse("index.html")

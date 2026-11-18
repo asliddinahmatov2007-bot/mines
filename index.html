@@ -2,7 +2,7 @@
 <html lang="uz"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Mines</title>
+<title>Ochko 21</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root{--bg:#0e1420;--panel:#172033;--cell:#212c44;--ink:#e8eefc;--dim:#8b97b3;--gem:#2fd5a0;--bomb:#ff5d6c;--accent:#ffc857}
@@ -27,65 +27,68 @@ input{flex:1;min-width:0;background:var(--bg);border:1px solid var(--cell);color
 .mn button.on{background:#6c5ce7}
 .go{width:100%;border:0;border-radius:12px;padding:15px;font-size:18px;font-weight:700;background:var(--gem);color:#06251c}
 .go.cash{background:var(--accent);color:#1a1300}.go:disabled{opacity:.5}
+.tabs{display:flex;gap:6px;margin-bottom:10px}
+.tabs button{flex:1;background:var(--panel);color:var(--dim);border:0;border-radius:10px;padding:10px;font-size:16px;font-weight:600}
+.tabs button.on{background:#6c5ce7;color:#fff}
+.hand{display:flex;gap:6px;flex-wrap:wrap;min-height:84px;margin-top:8px}
+.card{width:56px;height:80px;background:#f4f6fb;color:#111;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:20px}
+.card.red{color:#d92d3f}
+.card.back{background:repeating-linear-gradient(45deg,#3b4a73,#3b4a73 6px,#2c3858 6px,#2c3858 12px)}
+.lbl{display:flex;justify-content:space-between;color:var(--dim)}.lbl b{color:var(--ink);font-size:20px}
+.two{display:flex;gap:8px}.two .go{flex:1}
 </style></head><body>
-<div class="top"><b>Mines</b><span class="bal" id="bal">0</span></div>
-<div class="mults" id="mults"></div>
-<div id="msg"></div>
-<div class="grid" id="grid"></div>
+<div class="top"><b>Ochko 21</b><span class="bal" id="bal">0</span></div>
+<div id="bmsg" style="text-align:center;min-height:24px;margin:6px 0;font-weight:600"></div>
+<div class="box"><div class="lbl"><span>Diler</span><b id="dv"></b></div><div class="hand" id="dh"></div></div>
+<div class="box"><div class="lbl"><span>Siz</span><b id="pv"></b></div><div class="hand" id="ph"></div></div>
 <div class="box">
-  <div class="row"><input id="bet" type="number" inputmode="decimal" value="10" min="1">
-  <button class="sm" onclick="bet.value=Math.max(1,Math.floor(bet.value/2))">½</button>
-  <button class="sm" onclick="bet.value=Math.floor(bet.value*2)">×2</button></div>
-  <div class="mn" id="mn"></div>
-  <button class="go" id="go" onclick="main()">Boshlash</button>
+  <div id="bidle">
+    <div class="row"><input id="bbet" type="number" inputmode="decimal" value="10" min="1">
+    <button class="sm" onclick="bbet.value=Math.max(1,Math.floor(bbet.value/2))">½</button>
+    <button class="sm" onclick="bbet.value=Math.floor(bbet.value*2)">×2</button></div>
+    <button class="go" style="margin-top:10px" onclick="bstart()">Boshlash</button>
+  </div>
+  <div id="bact" class="two" hidden>
+    <button class="go" onclick="bhit()">Yana</button>
+    <button class="go cash" onclick="bstand()">Yetarli</button>
+  </div>
 </div>
 <script>
 const tg=Telegram.WebApp;tg.ready();tg.expand();
-let s={},mines=3;
 const $=id=>document.getElementById(id);
-const bet=$('bet');
-async function api(p,b){
-  const r=await fetch('/api/'+p,{method:'POST',headers:{'Content-Type':'application/json','X-Init-Data':tg.initData},body:JSON.stringify(b||{})});
+let b={};
+async function api(p,body){
+  const r=await fetch('/api/'+p,{method:'POST',headers:{'Content-Type':'application/json','X-Init-Data':tg.initData},body:JSON.stringify(body||{})});
   const j=await r.json();
-  if(!r.ok){$('msg').textContent=j.detail||'Xatolik';return null}
+  if(!r.ok){$('bmsg').style.color='var(--bomb)';$('bmsg').textContent=j.detail||'Xatolik';return null}
   return j;
 }
-function mult(n,k){let c=(a,b)=>{let r=1;for(let i=1;i<=b;i++)r=r*(a-b+i)/i;return r};return Math.round(97*c(25,k)/c(25-n,k))/100}
-function setMines(n){mines=n;draw()}
-function drawMn(){
-  $('mn').innerHTML=[1,3,5,10,24].map(n=>`<button class="${n==mines?'on':''}" ${s.active?'disabled':''} onclick="setMines(${n})">${n}</button>`).join('');
+function card(c,back){
+  if(back)return '<div class="card back"></div>';
+  return `<div class="card ${'♥♦'.includes(c[1])?'red':''}">${c[0]}${c[1]}</div>`;
 }
-function draw(){
-  $('bal').textContent=(s.balance??0).toLocaleString()+' ball';
-  const n=s.active?(s.mines_n||mines):mines, k=s.opened?s.opened.length:0;
-  $('mults').innerHTML=[1,2,3,4,5,6].map(i=>`<span class="${s.active&&i==k+1?'on':''}">${mult(n,i)}x</span>`).join('');
-  let h='';
-  for(let i=0;i<25;i++){
-    let cls='c',t='';
-    const op=s.opened&&s.opened.includes(i), mn=s.mines&&s.mines.includes(i);
-    if(op){cls+=' gem';t='💎'}else if(mn){cls+=' bomb';t='💣'}else if(s.mines)cls+=' ghost';
-    h+=`<button class="${cls}" onclick="openCell(${i})" ${s.active&&!op?'':'disabled'}>${t}</button>`;
-  }
-  $('grid').innerHTML=h;
-  const go=$('go');
-  if(s.active){go.className='go cash';go.disabled=!k;go.textContent=k?`Olish ${(s.bet*s.mult).toFixed(2)}`:'Katakni oching'}
-  else{go.className='go';go.disabled=false;go.textContent='Boshlash'}
-  drawMn();
+function bdraw(){
+  $('bal').textContent=(b.balance??0).toLocaleString()+' ball';
+  const act=b.active;
+  $('dh').innerHTML=(b.dealer||[]).map(c=>card(c)).join('')+(act?card(0,1):'');
+  $('ph').innerHTML=(b.player||[]).map(c=>card(c)).join('');
+  $('dv').textContent=act?'?':(b.dv??'');
+  $('pv').textContent=b.pv??'';
+  $('bidle').hidden=act;$('bact').hidden=!act;
 }
-async function load(){const j=await api('state');if(j){s=j;if(s.active)s.mines_n=s.mines_n||mines;draw()}}
-async function main(){
-  const j=s.active?await api('cashout'):await api('start',{bet:+bet.value,mines});
-  if(!j)return;apply(j,!s.active);
+function bapply(j){
+  b=j;const m={blackjack:'Blackjack! ',win:'Yutdingiz ',push:'Durang ',lose:'Yutqazdingiz '};
+  if(j.result){
+    const net=+(j.payout-j.bet).toFixed(2);
+    $('bmsg').textContent=m[j.result]+(net>0?'+'+net:net<0?net:'');
+    $('bmsg').style.color=net>0?'var(--gem)':net<0?'var(--bomb)':'var(--dim)';
+    tg.HapticFeedback?.notificationOccurred(net>0?'success':net<0?'error':'warning');
+  }else $('bmsg').textContent='';
+  bdraw();
 }
-async function openCell(i){const j=await api('open',{cell:i});if(j)apply(j)}
-function apply(j,fresh){
-  const was=s.active;
-  if(j.active&&fresh)j.mines_n=mines;else if(j.active)j.mines_n=s.mines_n;
-  s=j;
-  $('msg').textContent=j.won===true?`Yutdingiz: +${j.payout}`:j.won===false?'Mina! Tikish yo\'qoldi':'';
-  $('msg').style.color=j.won===true?'var(--gem)':'var(--bomb)';
-  if(j.won!==undefined)tg.HapticFeedback?.notificationOccurred(j.won?'success':'error');
-  draw();
-}
-load();
+async function bload(){const j=await api('bj/state');if(j){b=j;bdraw()}}
+async function bstart(){const j=await api('bj/start',{bet:+$('bbet').value});if(j)bapply(j)}
+async function bhit(){const j=await api('bj/hit');if(j)bapply(j)}
+async function bstand(){const j=await api('bj/stand');if(j)bapply(j)}
+bload();
 </script></body></html>
